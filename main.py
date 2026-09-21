@@ -5,22 +5,37 @@ Enterprise-grade RAG platform with:
 - Multi-tenant knowledge bases
 - Document upload & ingestion
 - Hybrid Search (Vector + BM25)
+- Reranking
+- Conversation memory
+- Agent tools
 - Guardrails (anti-hallucination)
 - REST API with CORS
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 import os
 
 from config.settings import settings
 from api.routes import chat, knowledge_base
+from core.knowledge_base.manager import KnowledgeBaseManager
+
 
 # ─── App Setup ─────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="RAG Bot Backend",
-    description="Enterprise-grade RAG platform with multi-tenant knowledge bases",
+    description="""
+    Enterprise-grade RAG platform with multi-tenant knowledge bases.
+    
+    Features:
+    - Multi-tenant knowledge base isolation
+    - Hybrid Search (Vector + BM25)
+    - Document ingestion (PDF/TXT/MD/DOCX)
+    - Reranking (Cross-Encoder)
+    - Conversation memory
+    - Agent tools
+    - Guardrails (anti-hallucination)
+    """,
     version="1.0.0",
 )
 
@@ -32,6 +47,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ─── Global Managers ──────────────────────────────────────────────────────────
+
+kb_manager = KnowledgeBaseManager()
+
 
 # ─── Routes ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +71,8 @@ def health_check():
             "reranker": settings.USE_RERANKER,
             "guardrail": settings.USE_GUARDRAIL,
             "cache": settings.USE_CACHE,
+            "conversation_memory": True,
+            "agent_tools": True,
         },
     }
 
@@ -61,12 +83,16 @@ def health_check():
 def root():
     return {
         "name": "RAG Bot Backend",
+        "version": "1.0.0",
         "docs": "/docs",
         "health": "/health",
         "features": [
             "Multi-tenant knowledge bases",
             "Hybrid Search (Vector + BM25)",
-            "Document ingestion (PDF/TXT/MD)",
+            "Document ingestion (PDF/TXT/MD/DOCX)",
+            "Reranking (Cross-Encoder)",
+            "Conversation memory",
+            "Agent tools",
             "Guardrails (anti-hallucination)",
         ],
     }
