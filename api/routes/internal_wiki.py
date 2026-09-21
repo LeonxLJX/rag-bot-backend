@@ -217,9 +217,15 @@ async def wiki_chat(
 ):
     """
     Internal wiki chatbot.
-    
+
     Employees can ask questions about company policies.
-    Access control: based on department.
+    Access control: JWT required (see core.auth.jwt_auth.get_current_user).
+
+    Retrieval is a real lexical match over the seeded policy corpus for the
+    requested department — no LLM call here, so the scenario works offline.
+    A production deployment would swap this for the same RAGEngine pipeline
+    used by /api/chat (embedding + hybrid search + generation), with each
+    department backed by its own knowledge base id.
     """
     logger.info(
         "Wiki chat",
@@ -230,12 +236,38 @@ async def wiki_chat(
         },
     )
 
-    # In production: RAG retrieve from the appropriate department's KB
-    # For demo, just return a placeholder response
+    dept_id = request.department if request.department in DEPARTMENTS else None
+    # Search the requested department only; fall back to all when unset.
+    scope = {dept_id: DEPARTMENTS[dept_id]} if dept_id else DEPARTMENTS
+
+    question_terms = {w.strip(".,?!").lower() for w in request.question.split()} - {""}
+
+    scored = []
+    for d_id, dept in scope.items():
+        for policy in dept["policies"]:
+            haystack = (policy["title"] + " " + policy["content"]).lower()
+            overlap = sum(1 for t in question_terms if t and t in haystack)
+            if overlap:
+                scored.append((overlap, d_id, policy))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    if not scored:
+        return {
+            "answer": "I couldn't find a policy that matches your question. "
+                      "Try rephrasing, or contact the relevant department directly.",
+            "department": dept_id or "all",
+            "sources": [],
+            "confidence": 0.0,
+        }
+
+    top = scored[0]
+    _, best_dept, best_policy = top
+    max_overlap = top[0]
+    confidence = round(min(1.0, max_overlap / max(len(question_terms), 1)), 2)
 
     return {
-        "answer": f"Based on our internal policies: {request.question}",
-        "department": request.department or "general",
-        "sources": ["policy-1.pdf", "policy-2.pdf"],
-        "confidence": 0.85,
+        "answer": f"{best_dept} — {best_policy['title']}:\n{best_policy['content']}",
+        "department": best_dept,
+        "sources": [f"{best_dept}/{best_policy['title']}"],
+        "confidence": confidence,
     }

@@ -21,7 +21,7 @@ import time
 import os
 
 from config.settings import settings
-from api.routes import chat, knowledge_base, customer_support, internal_wiki, product_docs, support_tickets
+from api.routes import auth, chat, knowledge_base, customer_support, internal_wiki, product_docs, support_tickets
 from core.knowledge_base.manager import KnowledgeBaseManager
 from core.middleware.rate_limit import rate_limit_middleware
 from core.logging.structured_logger import logger
@@ -101,6 +101,7 @@ kb_manager = KnowledgeBaseManager()
 
 # ─── Routes ────────────────────────────────────────────────────────────────────
 
+app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(knowledge_base.router)
 app.include_router(customer_support.router)

@@ -109,6 +109,16 @@ Context: {context}"""),
             | StrOutputParser()
         )
 
+    def _retrieve(self, question: str) -> List:
+        """Run the retriever once; returns langchain Documents (or [])."""
+        if self.retriever is None:
+            return []
+        try:
+            return self.retriever.invoke(question)
+        except Exception:
+            # Retrieval failure must not break generation — chain still runs.
+            return []
+
     def query(self, question: str) -> Dict:
         """Query the RAG system."""
         if not self.chain:
@@ -119,11 +129,22 @@ Context: {context}"""),
             # Simple guardrail — could be enhanced with LLM check
             pass
 
+        docs = self._retrieve(question)
         answer = self.chain.invoke(question)
+
+        # Real citations: content snippet + retrieval score when available.
+        contexts = [
+            {
+                "content": d.page_content,
+                "score": getattr(d, "metadata", {}).get("score"),
+            }
+            for d in docs
+        ]
 
         return {
             "answer": answer,
-            "sources": [],  # TODO: return actual sources
+            "sources": contexts,      # kept for backward compatibility
+            "contexts": contexts,     # canonical key used by API routes
             "kb_id": self.kb_id,
         }
 

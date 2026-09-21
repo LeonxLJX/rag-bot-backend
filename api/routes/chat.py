@@ -1,7 +1,14 @@
 """
-Chat Routes — Conversation endpoints
+Chat Routes — Conversation endpoints.
+
+Real retrieval contexts are returned as `sources` (no more empty placeholders),
+and multi-turn history is persisted in a process-local session store:
+in-memory dict, capped per session, TTL-evicted on read. Production should
+swap this for Redis (same interface, see _SESSIONS comments).
 """
-from fastapi import APIRouter, Depends, HTTPException
+import time
+import uuid
+from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional, List
 
@@ -41,38 +48,74 @@ class ChatResponse(BaseModel):
     session_id: Optional[str] = None
 
 
+# ─── Session store (process-local; production: Redis with the same shape) ─────
+
+MAX_MESSAGES_PER_SESSION = 50
+SESSION_TTL_SECONDS = 24 * 3600
+
+# session_id -> {"messages": [...], "last_seen": epoch_seconds}
+_SESSIONS: dict[str, dict] = {}
+
+
+def _append_message(session_id: str, role: str, content: str) -> None:
+    """Record one turn, trimming to the newest MAX_MESSAGES_PER_SESSION."""
+    entry = _SESSIONS.setdefault(session_id, {"messages": [], "last_seen": time.time()})
+    entry["last_seen"] = time.time()
+    entry["messages"].append({"role": role, "content": content, "ts": entry["last_seen"]})
+    if len(entry["messages"]) > MAX_MESSAGES_PER_SESSION:
+        entry["messages"] = entry["messages"][-MAX_MESSAGES_PER_SESSION:]
+
+
+def _evict_expired() -> None:
+    now = time.time()
+    expired = [sid for sid, e in _SESSIONS.items() if now - e["last_seen"] > SESSION_TTL_SECONDS]
+    for sid in expired:
+        _SESSIONS.pop(sid, None)
+
+
 @router.post("/", response_model=ChatResponse)
 def chat(req: ChatRequest):
     """
     Send a message to the RAG chatbot.
-    
+
     - **message**: User's question
     - **kb_id**: Knowledge base ID (default: default)
-    - **session_id**: Chat session ID for multi-turn
+    - **session_id**: Chat session ID for multi-turn; created when omitted
     """
     engine = get_rag_engine(req.kb_id)
+    session_id = req.session_id or uuid.uuid4().hex
 
     try:
         result = engine.query(req.message)
-    except ValueError as e:
-        # No documents loaded yet
+    except ValueError:
+        # No documents loaded yet — still record the turn so history is honest.
+        _append_message(session_id, "user", req.message)
         return ChatResponse(
             answer="No documents loaded in this knowledge base yet. Please upload documents first.",
             sources=[],
             kb_id=req.kb_id or settings.DEFAULT_KB_ID,
-            session_id=req.session_id,
+            session_id=session_id,
         )
+
+    sources = [Source(content=c["content"], score=c.get("score")) for c in result.get("contexts", [])]
+
+    _append_message(session_id, "user", req.message)
+    _append_message(session_id, "assistant", result["answer"])
 
     return ChatResponse(
         answer=result["answer"],
-        sources=[],  # TODO: return actual sources
+        sources=sources,
         kb_id=result["kb_id"],
-        session_id=req.session_id,
+        session_id=session_id,
     )
 
 
 @router.get("/history/{session_id}")
 def get_chat_history(session_id: str):
-    """Get chat history for a session."""
-    # TODO: implement with database
-    return {"session_id": session_id, "messages": []}
+    """Return the retained messages for a session (TTL-evicted, capped)."""
+    _evict_expired()
+    entry = _SESSIONS.get(session_id)
+    return {
+        "session_id": session_id,
+        "messages": entry["messages"] if entry else [],
+    }

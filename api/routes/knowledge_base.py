@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import os
 
+from core.auth.jwt_auth import get_current_user
 from core.ingest.loader import DocumentIngestor
 from core.rag.engine import RAGEngine
 from api.routes.chat import rag_engines
@@ -27,10 +28,11 @@ class KBResponse(BaseModel):
 async def upload_document(
     kb_id: str,
     file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
 ):
     """
-    Upload a document to a knowledge base.
-    
+    Upload a document to a knowledge base (requires JWT).
+
     - **kb_id**: Knowledge base ID
     - **file**: PDF, TXT, or MD file
     """
@@ -87,8 +89,8 @@ def get_kb_stats(kb_id: str):
 
 
 @router.delete("/{kb_id}")
-def delete_kb(kb_id: str):
-    """Delete a knowledge base."""
+def delete_kb(kb_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a knowledge base (requires JWT)."""
     if kb_id in rag_engines:
         del rag_engines[kb_id]
     return {"status": "deleted", "kb_id": kb_id}
