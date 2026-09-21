@@ -23,7 +23,8 @@ from langchain.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
 
 from config.settings import settings
-from core.reranker.reranker import get_reranker, SimpleReranker
+from core.reranker.reranker import get_reranker
+from core.generators.guardrail import Guardrail
 
 
 @dataclass
@@ -61,7 +62,8 @@ class FileRAGEngine:
         self.retriever = None
         self.chain = None
         self.chunks: List[str] = []
-        self.reranker = get_reranker("simple")  # Use cross_encoder in production
+        self.reranker = get_reranker("cross_encoder")
+        self.guardrail = Guardrail() if settings.USE_GUARDRAIL else None
 
         # Splitter
         self.splitter = RecursiveCharacterTextSplitter(
@@ -181,11 +183,15 @@ Context: {context}"""),
         # Generate
         answer = self.chain.invoke(question)
 
-        # Guardrail: check if answer is grounded
-        if settings.USE_GUARDRAIL:
-            # Simple guardrail check
-            # In production, use LLM to verify
-            pass
+        # Guardrail: real anti-hallucination check
+        guardrail_passed = True
+        if self.guardrail:
+            context_text = "\n\n".join(retrieval_result.documents[:3])
+            answer, guardrail_passed = self.guardrail.check_answer(
+                question=question,
+                context=context_text,
+                answer=answer,
+            )
 
         return {
             "answer": answer,
@@ -196,6 +202,7 @@ Context: {context}"""),
             "kb_id": self.kb_id,
             "retrieval_type": retrieval_result.retriever_type,
             "num_chunks_retrieved": len(retrieval_result.documents),
+            "guardrail_passed": guardrail_passed,
         }
 
     def build(self, chunks: List[str]):
